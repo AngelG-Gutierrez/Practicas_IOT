@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import serial
 import threading
+import json
+import time
 from serial.tools import list_ports
 
 arduino = None
@@ -9,10 +11,12 @@ ventana = tk.Tk()
 estado = tk.StringVar(value="Sin conexión")
 seleccion = tk.StringVar()
 
-# Ventana principal
 ventana.title("Ventana con pestañas")
 ventana.geometry("500x300")
 ventana.protocol('WM_DELETE_WINDOW', lambda: askQuit())
+
+icono = tk.PhotoImage(file="icon.png")
+ventana.iconphoto(True, icono)
 
 temp = tk.StringVar()
 humed = tk.StringVar()
@@ -33,6 +37,14 @@ def mostrar():
 def actualizar_estado(color):
     canvas.itemconfig(estado_circulo, fill=color)
 
+def actualizar_pestanas():
+    if estado.get() == "Conectado":
+        nb.tab(1, state="normal")
+        nb.tab(2, state="normal")
+    else:
+        nb.tab(1, state="disabled")
+        nb.tab(2, state="disabled")
+
 def conectar():
     global arduino
     seleccion_puerto = selector.get()
@@ -46,10 +58,15 @@ def conectar():
             arduino = serial.Serial(seleccion_puerto, 9600, timeout=1)
             estado.set("Conectado")
             actualizar_estado("green")
-            arduino.write(b"Conectado\n")
+
+            time.sleep(2)
+            arduino.write("Conectado\n".encode())
+
+            actualizar_pestanas()
         except serial.SerialException:
             estado.set("Sin conexión")
             actualizar_estado("red")
+            actualizar_pestanas()
     else:
         estado.set("Seleccione un puerto")
         actualizar_estado("red")
@@ -60,24 +77,8 @@ def desconectar():
         arduino.close()
         estado.set("Sin conexión")
         actualizar_estado("red")
-    else:
-        estado.set("No hay conexión")
-        actualizar_estado("red")
-
-def comprobar_conexion():
-    global arduino
-    if arduino and arduino.is_open:
-        arduino.write(b"Comprobar\n")
-        respuesta = arduino.readline().decode().strip()
-        if respuesta == "CONECTADO":
-            estado.set("Conectado")
-            actualizar_estado("green")
-        else:
-            estado.set("Sin conexión")
-            actualizar_estado("red")
-    else:
-        estado.set("Sin conexión")
-        actualizar_estado("red")
+    
+    actualizar_pestanas()
 
 def leer_datos():
     global arduino
@@ -86,11 +87,15 @@ def leer_datos():
             if arduino and arduino.in_waiting > 0:
                 data = arduino.readline().decode('utf-8').strip()
                 print("Datos recibidos:", data)
+
                 if data.startswith('{') and data.endswith('}'):
-                    valores = eval(data)
-                    temp.set(valores.get("tempC", "N/A"))
-                    humed.set(valores.get("humed", "N/A"))
-                    ldr.set(valores.get("LDR", "N/A"))
+                    try:
+                        valores = json.loads(data)
+                        temp.set(valores.get("tempc", "N/A"))
+                        humed.set(valores.get("humed", "N/A"))
+                        ldr.set(valores.get("ldr", "N/A"))
+                    except json.JSONDecodeError:
+                        print("Error al decodificar JSON")
         except Exception as e:
             print("Error leyendo datos:", e)
             break
@@ -118,8 +123,13 @@ def enviar_rgb():
         print("Enviando:", cadenaRGB)
         if arduino and arduino.is_open:
             arduino.write(cadenaRGB.encode('utf-8'))
+            actualizar_color_circulo(int(r), int(g), int(b))
         else:
             messagebox.showerror("Error", "No hay conexión con Arduino")
+
+def actualizar_color_circulo(r, g, b):
+    color_hex = f'#{r:02x}{g:02x}{b:02x}'
+    canvas_rgb.itemconfig(circulo_rgb, fill=color_hex)
 
 nb = ttk.Notebook(ventana)
 nb.pack(fill='both', expand=True)
@@ -132,7 +142,9 @@ nb.add(p1, text=' Conexión ')
 nb.add(p2, text=' Lectura DHT11 & LDR ')
 nb.add(p3, text=' Escritura RGB ')
 
-# Contenido de la pestaña 1 (Conexión)
+nb.tab(1, state="disabled")
+nb.tab(2, state="disabled")
+
 selector = ttk.Combobox(p1, state="readonly", textvariable=seleccion)
 selector.pack(pady=10)
 
@@ -146,7 +158,6 @@ boton_conectar.place(x=30, y=100)
 boton_desconectar = tk.Button(p1, text="Desconectar", command=desconectar)
 boton_desconectar.place(x=150, y=100)
 
-# Contenido de la pestaña 2 (Lectura DHT11 & LDR)
 tk.Label(p2, text="Temperatura C:").pack()
 tk.Entry(p2, textvariable=temp, state="readonly").pack()
 
@@ -156,7 +167,6 @@ tk.Entry(p2, textvariable=humed, state="readonly").pack()
 tk.Label(p2, text="Intensidad LDR:").pack()
 tk.Entry(p2, textvariable=ldr, state="readonly").pack()
 
-# Contenido de la pestaña 3 (Envío de datos RGB)
 tk.Label(p3, text="R:").pack()
 entrada_r = tk.Entry(p3)
 entrada_r.pack()
@@ -169,9 +179,9 @@ tk.Label(p3, text="B:").pack()
 entrada_b = tk.Entry(p3)
 entrada_b.pack()
 
-canvas = tk.Canvas(p3, width=80, height=80)
-canvas.place(x=350, y=60)
-estado_circulo = canvas.create_oval(5, 5, 75, 75, fill="red")
+canvas_rgb = tk.Canvas(p3, width=80, height=80)
+canvas_rgb.place(x=350, y=60)
+circulo_rgb = canvas_rgb.create_oval(5, 5, 75, 75, fill="black")
 
 boton_rgb = tk.Button(p3, text="Enviar", command=enviar_rgb)
 boton_rgb.pack()
